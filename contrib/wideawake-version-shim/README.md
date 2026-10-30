@@ -4,44 +4,7 @@
 
 构建：`build.bat`（MSVC 2022 Build Tools，产物 `version.dll`）。
 
-> 反向分析依据见 [`05-pcmanager-qr-fix.md`](../../docs/wideawake-pc14/05-pcmanager-qr-fix.md)。
-
-## 一键部署（管理员 PowerShell）
-
-```powershell
-# 1) 先构建 version.dll：双击 build.bat，或在命令行执行（需 MSVC 2022 Build Tools + Windows SDK，x64）
-.\build.bat
-#    shim 是纯 C++ 代理 DLL，不需要 Rust 工具链；产物即本目录 version.dll（已被 .gitignore 忽略，不入库）。
-
-# 2) 一键部署（未加 -Yes 会先打印计划并要求输入 Y 确认；非管理员运行会自动弹 UAC 提权）
-Set-ExecutionPolicy Bypass -Scope Process -Force
-.\install.ps1 -Yes
-```
-
-`install.ps1` 自动完成：探测安装目录（`C:\Program Files\Huawei\PCManager`，可用 `-InstallDir` 覆盖）→ 停四个服务 + 同批 taskkill 循环破双服务互看门狗 → 旧 DLL 改名 `version.dll.keep-HHMMSS`（只保留最近 3 份备份）→ 复制新 DLL 并做 **SHA-256 校验**（不一致自动回滚）→ 服务恢复「自动」并启动 → 非提权重拉 PCManager。目标哈希与源一致时输出「已是最新」直接退出 0。
-
-**投屏前（镜像 / 查看手机文件 / 扩展屏建组阶段）**，先断开 WFD GO 父网卡上的 5GHz STA（state=132 的 DBS 根因）：
-
-```powershell
-.\precast.ps1 -List                                        # 只查看：WFD 虚拟网卡 → 父网卡映射 + 当前 SSID
-.\precast.ps1                                              # 自动识别父网卡并 netsh wlan disconnect（一般无需管理员）
-# 手机上发起协同，出现"协同中"后连回即可，已建立的会话不受影响（实测 90s 81/81 ping 不丢）：
-.\precast.ps1 -Reconnect -ProfileName "<你的WLAN配置文件名>"  # 配置文件名用 netsh wlan show profiles 查
-```
-
-**回滚**：`.\install.ps1 -Uninstall -Yes`（停服 → 删除本 shim → 把最新 `version.dll.keep-*` 恢复为 version.dll → 启服）。IFEO 安装门注册表项不由本脚本管理，需要时按 [03 文档 §7.3](../../docs/wideawake-pc14/03-pcmanager-device-gate-bootstrap-analysis.md) 手动处理。
-
-### 能力矩阵（14.0.7.310，真机验证 2026-10-30）
-
-| 能力 | 状态 | 备注 |
-|---|---|---|
-| 非华为机安装 14.0.7 | ✅ | 依赖 IFEO 转发器（见 [03](../../docs/wideawake-pc14/03-pcmanager-device-gate-bootstrap-analysis.md)） |
-| 扫码配对绑定 | ✅ | shim 补丁 1–4 |
-| PC ↔ 手机双向文件发送 | ✅ | WFD GO 原始 BYTES 通道 |
-| 查看手机文件（DFS） | ✅ | 补丁 5；建组前先跑 precast |
-| 手机镜像（H.264 实时） | ✅ | 补丁 5 + precast 断 STA |
-| 扩展屏 | ⚠️ 部分机型 | 部分机型入口被能力位裁剪，分析进行中，见 [06](../../docs/wideawake-pc14/06-pcmanager-multiscreen-flow-analysis.md) |
-| 华为分享陌生设备发现 | ⛔ 硬件限制 | 非华为蓝牙不能 TX BLE 广播，软件不可修；已绑定设备间收发正常 |
+> 反向分析依据见 [`docs/research/2026-10-29-pcmanager-qr-fix.md`](../../docs/research/2026-10-29-pcmanager-qr-fix.md)。
 
 ## 做了什么
 
@@ -52,16 +15,32 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 | 3 | SynergyUtil.dll `GetProductTypeInfoFromName` | 0x3F364 | `44 38 7B 70 75 1A` | `90 × 6` | NOP 掉 `IsSupportProperty("HWLoginGuide","china")` 的国别门控 |
 | 4 | HiConnectivitySDK.dll `WifiSystemApi::GetWifiState` | 0x36CC0 | `48 8B C4 55 48 8D A8 58` | `B8 01 00 00 00 C3` | 直接 `return 1`。该函数向 SYSTEM 的 HiConnectivityService 发 IPC 取 WLAN 状态，非华为网卡恒报 off，导致 Nearby 的 AP 状态机停在 Default，二维码页进入「请开启 WLAN/蓝牙」降级态 |
 | 5 | SynergyService.dll `CmdChannelBase::CreateBufferByModel`（SynergyPYP 货架门调用点） | 0x3d4d5c | `84 C0`（test al,al） | `0C 01`（or al,1） | G1 门：每个 handoff/model 命令（镜像 Start Param 链、DFS 文件访问 msgId 67700993）都先问 `MBASoftShelf::IsSupportPlugin("SynergyPYP")`，非华为机加密货架基线答 false → `SendParcelable error=-15`、HwMirror 30s 超时退出。改后 jne 恒走 supported 分支；只改本调用点，不动全局货架判定 |
+| 6 | HiConnectivityService.exe BLE 发射链（仅该服务进程生效） | 0x978B/0x97C2/0x97F9/0x98E9/0x9920 | `8B D3`（`mov edx,ebx`） | `31 D2`（`xor edx,edx`） | 强制 WiFi 厂商分类 = 0（通用），走 `BluetoothFindFirstRadio` 原始 HCI 多广播路径，替代 type-4(unknown=AIC) 死分支（`bleInterface is nullptr, return`）。修复华为分享陌生设备 BLE 广播 |
+| 6 | （同上）工厂 unknown 分支 | 0x54308 | `0F 84 27 01 00 00`（je → unknown） | `E9 28 01 00 00 90`（jmp → 通用适配器） | 同上保险 |
+| 6 | （同上）RX 接收 RSSI 哨兵门 | 0x5DE29 | `0F 85 F3 00 00 00` | `E9 F4 00 00 00 90` | 绕过 `-127` 哨兵丢弃（inbox 驱动 RSSI 正常时为空操作） |
 
-补丁 2/3 在模块加载时打（`LdrRegisterDllNotification`），补丁 4/5 同时覆盖加载时和已加载模块（`PatchExistingThread`）；全部带原字节校验，不匹配就跳过并记日志。
+补丁 2/3 在模块加载时打（`LdrRegisterDllNotification`），补丁 4/5 同时覆盖加载时和已加载模块（`PatchExistingThread`）；补丁 6 仅对 `HiConnectivityService.exe` 生效（该进程对 `HwFileUtil.dll`→`version.dll` 为 **delay-load**，需激活一次华为分享后 shim 才会进入服务进程并打补丁）。全部带原字节校验，不匹配就跳过并记日志。
 
-## 部署 / 回滚（手工流程；上方 install.ps1 已将其全自动化）
+## 部署 / 回滚
 
-**热替换（换补丁 5 时实测可行）**：HiConnectivityService ↔ HwDistributedMainService 互相看门狗、秒级互拉，直接换文件会被占用。需要管理员：
+### 单文件一键部署（推荐，远程/无构建环境）
+
+`wideawake-pcmanager-deploy.cmd` 是**自解压单文件**（内嵌已构建的 `version.dll` 含补丁 1–6 + `MBAInstallPreGate.exe` IFEO 转发器 + `deploy_payload.ps1`）。拷贝到目标机（非华为机）后**以管理员运行**：
+
+- 若 PCManager **未安装**：自动注册 IFEO 转发器，提示先跑官方 14.0.7.310 安装器（绕过机型校验），装完**重跑一次**本 cmd 才会热替换 shim；
+- 若已安装：停 4 服务 + 破互看门狗 + 热替换 `version.dll`（备份 `version.dll.keep-*`）+ 重启栈；盘上有安装器则一并注册 IFEO。
+
+> 安全：该文件**不含任何凭据/token/安装包**。目标机若在公网，部署后务必改弱口令、把 3389/5985 限定来源 IP。
+
+### 源码构建部署（本地已装 MSVC 2022 Build Tools）
+
+`build.bat` 产出 `version.dll`，手动放入 `C:\Program Files\Huawei\PCManager\`（与 PCManager.exe 同目录）。
+
+**热替换（换补丁时实测可行）**：HiConnectivityService ↔ HwDistributedMainService 互相看门狗、秒级互拉，直接换文件会被占用。需要管理员：
 
 1. 四个服务（HwPCCoreService / MBAMainService / HiConnectivityService / HwDistributedMainService）置手动并停止；
 2. 杀掉控制台进程后，同批 `taskkill /F /T /IM HiConnectivityService.exe /IM HwDistributedMainService.exe /IM MateBookService.exe /IM BasicService.exe` 循环到全部退出；
-3. 利用「已加载 DLL 可改名」把旧 `version.dll` 改名 `version.dll.keep-HHMMSS`，再复制新文件（hash 校验）；
+3. 利用「已加载 DLL 可改名」把旧 `version.dll` 改名 `version.keep-HHMMSS`，再复制新文件（hash 校验）；
 4. 服务恢复自动并启动，重新拉起 PCManager.exe。
 
 回滚：删除 `C:\Program Files\Huawei\PCManager\version.dll`（必要时把 `version.dll.keep-*` 改回）后重启电脑管家。
@@ -84,8 +63,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
   ```bash
   netsh wlan disconnect interface="WLAN"
   ```
-  （另一块网卡可继续上网；进入"协同中"后即可连回 STA，实测并发不影响已建立的会话，90s 监控 81/81 ping 不丢；投后 `netsh wlan connect name="<WLAN配置文件名>" interface="WLAN"` 恢复（`<WLAN配置文件名>` 请替换为自己的 WLAN 配置文件名，`netsh wlan show profiles` 可查）。）GO 本身跑在 2.4G/802.11b 即可，镜像不强制 5G；门只在 GO 建组阶段。详见 [06-pcmanager-multiscreen-flow-analysis.md](../../docs/wideawake-pc14/06-pcmanager-multiscreen-flow-analysis.md) §九。
-- ⛔ 华为分享的**陌生设备发现列表**为硬件限制：非华为蓝牙不能 TX BLE 广播（G4），软件不可修；已连接设备间收发不受影响。
+  （另一块网卡可继续上网；进入"协同中"后即可连回 STA，实测并发不影响已建立的会话，90s 监控 81/81 ping 不丢；投后 `netsh wlan connect name="Device_ap_235" interface="WLAN"` 恢复。）GO 本身跑在 2.4G/802.11b 即可，镜像不强制 5G；门只在 GO 建组阶段。详见分析文档 §九。
+- ⛔ 华为分享的**陌生设备发现列表**：原因是 HiConnectivityService 按 WiFi 芯片厂商分类（AIC=AIC8800→type4 unknown→`bleInterface is nullptr`），非蓝牙硬件本身——标准 WinRT 实测该蓝牙可发 BLE 广播。**补丁 6 已修复**（强制走通用 HCI 路径）。注意该进程对 `HwFileUtil→version.dll` 为 delay-load，需**激活一次华为分享**后 shim 才进入服务进程并打补丁。
 
 ## 注意
 

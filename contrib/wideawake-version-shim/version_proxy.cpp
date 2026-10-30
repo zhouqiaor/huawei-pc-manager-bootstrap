@@ -415,9 +415,47 @@ static void PatchSynergyService(HMODULE mod) {
                "SynergyPYP handoff gate forced supported");
 }
 
+// Huawei Share "stranger device discovery" fails because HiConnectivityService's
+// BLE advertise chain classifies the Wi-Fi card vendor by hardwareId and only
+// builds Intel/Qualcomm private-HCI adapters; AIC8800 (VID 2604) maps to type 4
+// "unknown" -> bleInterface stays null -> "bleInterface is nullptr, return".
+// The inbox Microsoft BTHUSB driver on this radio DOES support BLE advertising
+// (verified: WinRT publisher Started in 6ms, 1169 adverts received in 20s).
+// Force the vendor-type classification to 0 so the generic BluetoothFindFirstRadio
+// raw-HCI multi-adv path is taken instead of the dead unknown branch.
+static void PatchBleAdv(HMODULE mod) {
+    if (!mod) return;
+    BYTE* base = (BYTE*)mod;
+    // TX-1: five factory-call sites `mov edx, ebx` (wifiType) -> `xor edx, edx` (0).
+    static const size_t tx1[] = { 0x978B, 0x97C2, 0x97F9, 0x98E9, 0x9920 };
+    const BYTE tx1_expect[] = { 0x8B, 0xD3 };
+    const BYTE tx1_patch[]  = { 0x31, 0xD2 };
+    for (size_t i = 0; i < _countof(tx1); ++i)
+        PatchBytes(base + tx1[i], tx1_expect, tx1_patch, 2, "BleAdv wifiType->0");
+    // TX-2: factory `je` into unknown-branch -> unconditional jmp to generic adapter.
+    {
+        const BYTE expect[] = { 0x0F, 0x84, 0x27, 0x01, 0x00, 0x00 };
+        const BYTE patch[]  = { 0xE9, 0x28, 0x01, 0x00, 0x00, 0x90 };
+        PatchBytes(base + 0x54308, expect, patch, 6, "BleAdv generic adapter jmp");
+    }
+    // RX-1: RSSI == -127 sentinel discard -> always process (no-op on inbox radio).
+    {
+        const BYTE expect[] = { 0x0F, 0x85, 0xF3, 0x00, 0x00, 0x00 };
+        const BYTE patch[]  = { 0xE9, 0xF4, 0x00, 0x00, 0x00, 0x90 };
+        PatchBytes(base + 0x5DE29, expect, patch, 6, "BleAdv RSSI sentinel bypass");
+    }
+}
+
 static bool IsModule(const SHIM_LDR_DATA* m, const WCHAR* name) {
     if (!m || !m->BaseDllName || !m->BaseDllName->Buffer) return false;
     return _wcsicmp(m->BaseDllName->Buffer, name) == 0;
+}
+
+static bool IsHostProcess(const WCHAR* name) {
+    WCHAR path[MAX_PATH] = {0};
+    if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return false;
+    WCHAR* base = wcsrchr(path, L'\\');
+    return _wcsicmp(base ? base + 1 : path, name) == 0;
 }
 
 static VOID CALLBACK LdrNotify(ULONG reason, const SHIM_LDR_NOTIFY* data, PVOID) {
@@ -426,6 +464,7 @@ static VOID CALLBACK LdrNotify(ULONG reason, const SHIM_LDR_NOTIFY* data, PVOID)
     if (IsModule(&data->Loaded, L"SynergyUtil.dll")) PatchSynergyUtil((HMODULE)data->Loaded.DllBase);
     if (IsModule(&data->Loaded, L"HiConnectivitySDK.dll")) PatchConnectivity((HMODULE)data->Loaded.DllBase);
     if (IsModule(&data->Loaded, L"SynergyService.dll")) PatchSynergyService((HMODULE)data->Loaded.DllBase);
+    if (IsModule(&data->Loaded, L"HiConnectivityService.exe")) PatchBleAdv((HMODULE)data->Loaded.DllBase);
 }
 
 static DWORD WINAPI PatchExistingThread(LPVOID) {
@@ -442,6 +481,7 @@ static DWORD WINAPI PatchExistingThread(LPVOID) {
     PatchSynergyUtil(GetModuleHandleW(L"SynergyUtil.dll"));
     PatchConnectivity(GetModuleHandleW(L"HiConnectivitySDK.dll"));
     PatchSynergyService(GetModuleHandleW(L"SynergyService.dll"));
+    PatchBleAdv(GetModuleHandleW(nullptr));   // host process (HiConnectivityService.exe)
     ShimLog("import patch pass finished, modules=%d", patched);
     return 0;
 }
