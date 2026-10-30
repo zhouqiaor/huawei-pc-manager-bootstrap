@@ -1,5 +1,28 @@
 # 华为电脑管家安装包启动器
 
+> 🍳 **本 fork 新增：PCManager 14.0.7.310(C233) 非华为机一键适配（2026-10 更新，真机全链路验证）**
+>
+> - ✅ 非华为机安装 14.0.7 + 扫码配对 + 双向文件发送 + 查看手机文件 + 手机镜像（H.264 实时）全部打通；
+> - ⛔ 仅「华为分享陌生设备发现」不可用——非华为蓝牙不能 TX BLE 广播，属硬件限制；已绑定设备间收发正常；
+> - 适配三件套：IFEO 安装门转发器 + `version.dll` 代理 shim（5 处二进制补丁，**仅源码**）+ 投屏前断 STA 助手。
+
+**快速开始**
+
+1. **安装电脑管家 14**：按 [IFEO 转发器说明](docs/wideawake-pc14/03-pcmanager-device-gate-bootstrap-analysis.md) 绕过机型校验，装成 14.0.7.310(C233)。若用 V12（12.0.1.26），可直接用本仓上游安装器，往下滚到原 README。
+2. **构建 version.dll**：进入 [`contrib/wideawake-version-shim/`](contrib/wideawake-version-shim/) 运行 `build.bat`（需 MSVC 2022 Build Tools，x64；纯 C++，**不需要 Rust**）。仓库不收录编译产物。
+3. **一键部署 shim**（在该目录开管理员 PowerShell；不加 `-Yes` 会先打印计划待确认，非管理员会自动弹 UAC）：
+   ```powershell
+   Set-ExecutionPolicy Bypass -Scope Process -Force; .\install.ps1 -Yes
+   ```
+   自动停四服务、破双服务互看门狗、热替换 DLL（备份 + SHA-256 校验，只留最近 3 份备份）、恢复服务；`.\install.ps1 -Uninstall` 一键回滚。
+4. **投屏前断 STA**：手机发起镜像 / 扩展屏前运行 [`precast.ps1`](contrib/wideawake-version-shim/precast.ps1)（自动识别 WFD GO 父网卡并断开其 5GHz STA；另一块网卡可继续上网）；出现"协同中"后 `.\precast.ps1 -Reconnect -ProfileName <WLAN配置文件名>` 连回，已建立会话不受影响（实测 90s 81/81 ping 不丢）。手动等价操作：`netsh wlan disconnect interface="WLAN"`（接口名以 `-List` 自动探测为准）。
+
+**它解决了什么**：14.0.7 上上游 V12 安装器的 SMBIOS 劫持点已对不上调用方、非华为 WLAN 状态 IPC 恒报 off 致二维码页降级、非华为货架门答 false 致 SendParcelable -15、以及镜像 25s 后 state=132。战役总章（含 state=132 的 DBS 单射频并发根因与五条证伪链）见 [docs/wideawake-pc14/README.md](docs/wideawake-pc14/README.md)，镜像协议流与扩展屏分析见 [06-pcmanager-multiscreen-flow-analysis.md](docs/wideawake-pc14/06-pcmanager-multiscreen-flow-analysis.md)。
+
+---
+
+以下为上游 hamflx 原 README（V12 安装器说明）：
+
 ---
 
 ## Mentium

@@ -2,3 +2,5 @@ version.dll
 *.obj
 *.exp
 *.lib
+.last-exit
+install.log
