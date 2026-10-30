@@ -1,0 +1,19 @@
+LIBRARY version
+EXPORTS
+    GetFileVersionInfoSizeW=Shim_GetFileVersionInfoSizeW
+    GetFileVersionInfoSizeA=Shim_GetFileVersionInfoSizeA
+    GetFileVersionInfoW=Shim_GetFileVersionInfoW
+    GetFileVersionInfoA=Shim_GetFileVersionInfoA
+    GetFileVersionInfoExW=Shim_GetFileVersionInfoExW
+    GetFileVersionInfoExA=Shim_GetFileVersionInfoExA
+    GetFileVersionInfoSizeExW=Shim_GetFileVersionInfoSizeExW
+    GetFileVersionInfoSizeExA=Shim_GetFileVersionInfoSizeExA
+    GetFileVersionInfoByHandle=Shim_GetFileVersionInfoByHandle
+    VerQueryValueW=Shim_VerQueryValueW
+    VerQueryValueA=Shim_VerQueryValueA
+    VerFindFileW=Shim_VerFindFileW
+    VerFindFileA=Shim_VerFindFileA
+    VerInstallFileW=Shim_VerInstallFileW
+    VerInstallFileA=Shim_VerInstallFileA
+    VerLanguageNameW=Shim_VerLanguageNameW
+    VerLanguageNameA=Shim_VerLanguageNameA
